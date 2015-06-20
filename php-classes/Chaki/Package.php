@@ -4,9 +4,10 @@ namespace Chaki;
 
 use Site;
 use Cache;
+use Emergence_FS;
 use Jarvus\Sencha\Framework;
-use \Gitonomy\Git\Repository;
-use \Gitonomy\Git\Reference\Branch;
+use Gitonomy\Git\Repository;
+use Gitonomy\Git\Reference\Branch;
 
 class Package extends \Jarvus\Sencha\Package
 {
@@ -18,6 +19,7 @@ class Package extends \Jarvus\Sencha\Package
     protected $branch;
 
     protected $repo;
+    protected $virtualPath;
 
 
     // factories
@@ -149,5 +151,20 @@ class Package extends \Jarvus\Sencha\Package
         }
 
         return $this->repo;
+    }
+
+    public function getVirtualPath($autoLoad = true)
+    {
+        if ($this->virtualPath) {
+            return $this->virtualPath;
+        }
+
+        $this->virtualPath = "sencha-workspace/packages/$this";
+
+        $tmpPath = Emergence_FS::getTmpDir();
+        $this->writeToDisk($tmpPath);
+        Emergence_FS::importTree($tmpPath, $this->virtualPath);
+
+        return $this->virtualPath;
     }
 }
