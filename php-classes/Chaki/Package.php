@@ -3,69 +3,151 @@
 namespace Chaki;
 
 use Site;
+use Cache;
 use Jarvus\Sencha\Framework;
+use \Gitonomy\Git\Repository;
+use \Gitonomy\Git\Reference\Branch;
 
 class Package extends \Jarvus\Sencha\Package
 {
-	// TODO: change to an instance method that only takes path and overrides a stock method
-	public static function writeToDisk($path, $name, Framework $framework)
-	{
-		// create target directory
-		mkdir($path, 0777, true);
+    public static $sharedCacheDirectory = '/tmp/chaki-packages';
+    public static $packageCacheTime = 60;
 
 
-		// get repo
-		$hotfixRepoPath = Site::$rootPath . '/site-data/chaki/'.$name.'.git';
+    protected $path;
+    protected $branch;
 
-		$hotfixRepoOptions = [
-		    'working_dir' => $path,
-		    'debug' => true,
-		    'logger' => \Emergence\Logger::getLogger()
-		];
-		
-		if (is_dir($hotfixRepoPath)) {
-		    $hotfixRepo = new \Gitonomy\Git\Repository($hotfixRepoPath, $hotfixRepoOptions);
-		} else {
-			$chakiData = @file_get_contents('http://chaki.io/packages/'.$name.'?format=json');
-			
-			if (!$chakiData || !($chakiData = @json_decode($chakiData, true))) {
-				throw new \Exception("Unable to find $name on chaki");
-			}
-
-		    $hotfixRepo = \Gitonomy\Git\Admin::cloneTo($hotfixRepoPath, 'https://github.com/'.$chakiData['data']['GitHubPath'].'.git', true, $hotfixRepoOptions);
-		}
+    protected $repo;
 
 
-		// choose best hotfixes branch
-		$hotfixReferences = $hotfixRepo->getReferences();
+    // factories
+    public static function load($name, Framework $framework)
+    {
+        $cacheKey = "chaki/packages/$framework/$name";
 
-		$hotfixBranch = null;
-		$hotfixVersionStack = explode('.', $framework->getVersion());
+        if (false === ($packageData = Cache::fetch($cacheKey))) {
+            // get repo
+            $repoPath = static::$sharedCacheDirectory . "/$name.git";
 
-		while (
-		    count($hotfixVersionStack) &&
-		    ($hotfixVersionBranchName = $framework->getName() . '/' . implode('/', $hotfixVersionStack)) &&
-		    !$hotfixReferences->hasBranch($hotfixVersionBranchName)
-		) {
-		    array_pop($hotfixVersionStack);
-		    $hotfixVersionBranchName = null;
-		}
+            if (is_dir($repoPath)) {
+                $repo = new Repository($repoPath);
+            } else {
+                $chakiData = @file_get_contents('http://chaki.io/packages/'.$name.'?format=json');
 
-		if (!$hotfixVersionBranchName && $hotfixReferences->hasBranch($framework->getName())) {
-		    $hotfixVersionBranchName = $framework->getName();
-		}
+                if (!$chakiData || !($chakiData = @json_decode($chakiData, true))) {
+                    throw new \Exception("Unable to find $name on chaki");
+                }
 
-		if (!$hotfixVersionBranchName) {
-		    $hotfixVersionBranchName = 'master';
-		}
-
-		$hotfixVersionBranch = $hotfixReferences->getBranch($hotfixVersionBranchName);
+                $repo = \Gitonomy\Git\Admin::cloneTo($repoPath, 'https://github.com/'.$chakiData['data']['GitHubPath'].'.git', true);
+            }
 
 
-		// checkout branch
-		$hotfixRepo->run('checkout', ['-f', $hotfixVersionBranchName]);
+            // choose best branch
+            $references = $repo->getReferences();
+
+            $branchName = null;
+            $frameworkVersionStack = explode('.', $framework->getVersion());
+
+            while (
+                count($frameworkVersionStack) &&
+                ($branchName = $framework->getName() . '/' . implode('/', $frameworkVersionStack)) &&
+                !$references->hasBranch($branchName)
+            ) {
+                array_pop($frameworkVersionStack);
+                $branchName = null;
+            }
+
+            if (!$branchName && $references->hasBranch($framework->getName())) {
+                $branchName = $framework->getName();
+            }
+
+            if (!$branchName) {
+                $branchName = 'master';
+            }
 
 
-		return $hotfixVersionBranchName;
-	}
+            // read packages.json
+            $packageConfig = @json_decode($repo->run('show', ["$branchName:package.json"]), true);
+
+            if (!$packageConfig || empty($packageConfig['name'])) {
+                throw new \Exception("Could not parse package.json for $packagePath");
+            }
+
+            if ($name != $packageConfig['name']) {
+                throw new \Exception("Name from package.json does not match package directory name for chaki package $name");
+            }
+
+
+            // build and cache package data
+            $packageData = [
+                'path' => $repoPath,
+                'branch' => $branchName,
+                'name' => $name,
+                'config' => $packageConfig
+            ];
+
+            Cache::store($cacheKey, $packageData, static::$packageCacheTime);
+        }
+
+
+        return new static($packageData['name'], $packageData['config'], $packageData['path'], $packageData['branch']);
+    }
+
+
+    // magic methods and property getters
+    public function __construct($name, $config, $path, $branch)
+    {
+        parent::__construct($name, $config);
+        $this->path = $path;
+        $this->branch = $branch;
+    }
+
+
+    // member methods
+    public function getFileContents($path)
+    {
+        try {
+            return $this->getRepo()->run('show', ["$this->branch:$path"]);
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    public function getFilePointer($path)
+    {
+        $buffer = fopen('php://memory', 'w+b');
+
+        try {
+            fwrite($buffer, $this->getRepo()->run('show', ["$this->branch:$path"]));
+            rewind($buffer);
+            return $buffer;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    public function writeToDisk($path)
+    {
+        if (!is_dir($path)) {
+            mkdir($path, 0777, true);
+        }
+
+        $this->getRepo(['working_dir' => $path])->run('checkout', ['-f', $this->branch]);
+
+        return true;
+    }
+
+    protected function getRepo($options = null)
+    {
+        if ($options) {
+            // no caching of custom-configured repo
+            return new Repository($this->path, $options);
+        }
+
+        if (!$this->repo) {
+            $this->repo = new Repository($this->path);
+        }
+
+        return $this->repo;
+    }
 }
