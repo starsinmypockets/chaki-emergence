@@ -37,7 +37,8 @@ class Package extends \Jarvus\Sencha\Package
                 $chakiData = @file_get_contents('http://chaki.io/packages/'.$name.'?format=json');
 
                 if (!$chakiData || !($chakiData = @json_decode($chakiData, true))) {
-                    throw new \Exception("Unable to find $name on chaki");
+                    Cache::store($cacheKey, null, static::$packageCacheTime);
+                    return null;
                 }
 
                 $repo = \Gitonomy\Git\Admin::cloneTo($repoPath, 'https://github.com/'.$chakiData['data']['GitHubPath'].'.git', true);
@@ -92,7 +93,7 @@ class Package extends \Jarvus\Sencha\Package
         }
 
 
-        return new static($packageData['name'], $packageData['config'], $packageData['path'], $packageData['branch']);
+        return $packageData ? new static($packageData['name'], $packageData['config'], $packageData['path'], $packageData['branch']) : null;
     }
 
 
@@ -166,5 +167,10 @@ class Package extends \Jarvus\Sencha\Package
         Emergence_FS::importTree($tmpPath, $this->virtualPath);
 
         return $this->virtualPath;
+    }
+
+    public function updateRepo()
+    {
+        $this->getRepo()->run('fetch', ['--all']);
     }
 }
