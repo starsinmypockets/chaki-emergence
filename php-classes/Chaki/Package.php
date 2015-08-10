@@ -6,6 +6,7 @@ use Site;
 use Cache;
 use Emergence_FS;
 use Jarvus\Sencha\Framework;
+use Jarvus\Sencha\Util;
 use Gitonomy\Git\Repository;
 use Gitonomy\Git\Reference\Branch;
 
@@ -70,10 +71,10 @@ class Package extends \Jarvus\Sencha\Package
 
 
             // read packages.json
-            $packageConfig = @json_decode($repo->run('show', ["$branchName:package.json"]), true);
+            $packageConfig = @json_decode(Util::cleanJson($repo->run('show', ["$branchName:package.json"])), true);
 
             if (!$packageConfig || empty($packageConfig['name'])) {
-                throw new \Exception("Could not parse package.json for $packagePath");
+                throw new \Exception('Could not parse package.json for ' . $repo->getPath() . '#' . $branchName);
             }
 
             if ($name != $packageConfig['name']) {
