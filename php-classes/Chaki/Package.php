@@ -172,6 +172,6 @@ class Package extends \Jarvus\Sencha\Package
 
     public function updateRepo()
     {
-        $this->getRepo()->run('fetch', ['--all']);
+        $this->getRepo()->run('fetch', ['origin', '+refs/heads/*:refs/heads/*']);
     }
 }
